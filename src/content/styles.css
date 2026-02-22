@@ -1,0 +1,275 @@
+.aozora-current-chunk {
+  outline: 2px solid rgba(28, 82, 165, 0.32);
+  border-radius: 4px;
+  background: rgba(255, 252, 235, 0.55);
+}
+
+.aozora-hl {
+  border-radius: 3px;
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+.aozora-hl-word {
+  background: rgba(255, 227, 122, 0.58);
+  border-bottom: 1px solid rgba(193, 124, 0, 0.8);
+}
+
+.aozora-hl-pattern {
+  background: rgba(176, 228, 255, 0.55);
+  border-bottom: 1px solid rgba(13, 91, 154, 0.75);
+}
+
+.aozora-hl-flash {
+  animation: aozora-flash 0.7s ease;
+}
+
+@keyframes aozora-flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 98, 0, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(255, 98, 0, 0);
+  }
+}
+
+.aozora-panel {
+  position: fixed;
+  right: 12px;
+  z-index: 2147483646;
+  overflow: auto;
+  background: #f8f7f2;
+  color: #1f2a37;
+  border: 1px solid #d4d4d4;
+  border-radius: 10px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  line-height: 1.4;
+}
+
+.aozora-panel[data-display-mode="floating"] {
+  top: 12px;
+  width: 320px;
+  max-height: 84vh;
+}
+
+.aozora-panel[data-display-mode="side"] {
+  top: 0;
+  right: 0;
+  width: var(--aozora-side-panel-width);
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+  border-right: none;
+  box-shadow: -8px 0 16px rgba(0, 0, 0, 0.18);
+}
+
+:root {
+  --aozora-side-panel-width: 360px;
+  --aozora-side-panel-gap: 18px;
+}
+
+html.aozora-sidepanel-active body {
+  margin-right: calc(var(--aozora-side-panel-width) + var(--aozora-side-panel-gap)) !important;
+  transition: margin-right 0.16s ease;
+}
+
+.aozora-panel-header {
+  padding: 12px;
+  border-bottom: 1px solid #e3e3e3;
+  background: linear-gradient(180deg, #f5f1e5 0%, #f8f7f2 80%);
+}
+
+.aozora-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.aozora-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #4d5d70;
+}
+
+.aozora-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.aozora-span-2 {
+  grid-column: span 2;
+}
+
+.aozora-duration-wrap {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #4d5d70;
+}
+
+.aozora-duration-wrap select {
+  border: 1px solid #b9c1cb;
+  background: #fff;
+  color: #233247;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.aozora-controls button,
+.aozora-tooltip button,
+.aozora-item button {
+  border: 1px solid #b9c1cb;
+  background: #fff;
+  color: #233247;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.aozora-controls button:hover,
+.aozora-tooltip button:hover,
+.aozora-item button:hover {
+  background: #f2f6ff;
+}
+
+.aozora-item button {
+  white-space: nowrap;
+}
+
+.aozora-primary {
+  background: #1a5fab !important;
+  border-color: #1a5fab !important;
+  color: #fff !important;
+}
+
+.aozora-meta {
+  padding: 0 12px 10px;
+  font-size: 12px;
+  color: #4d5d70;
+}
+
+.aozora-section {
+  padding: 8px 12px 12px;
+  border-top: 1px solid #e3e3e3;
+}
+
+.aozora-section-title {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.aozora-dictionary-subtitle {
+  margin: 8px 0 4px;
+  font-size: 11px;
+  color: #5b6676;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.aozora-list {
+  display: grid;
+  gap: 6px;
+}
+
+.aozora-compact-list {
+  gap: 4px;
+}
+
+.aozora-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid #d7dde6;
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.aozora-item-pattern {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.aozora-item-compact {
+  padding: 5px 7px;
+}
+
+.aozora-item-compact .aozora-item-text {
+  font-size: 11px;
+}
+
+.aozora-personal-dictionary {
+  border-top: 2px solid #ccd4de;
+}
+
+.aozora-panel[data-display-mode="floating"] .aozora-personal-dictionary {
+  display: none;
+}
+
+.aozora-item-text {
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.aozora-list-empty {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.aozora-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  width: min(340px, calc(100vw - 24px));
+  background: #fffef8;
+  border: 1px solid #d2d2d2;
+  border-radius: 8px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+  padding: 10px;
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+}
+
+.aozora-hidden {
+  display: none;
+}
+
+.aozora-tooltip-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.aozora-tooltip-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.aozora-tooltip-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1024px) {
+  .aozora-panel[data-display-mode="floating"] {
+    width: 288px;
+    max-height: 72vh;
+    right: 8px;
+    top: 8px;
+  }
+
+  .aozora-panel[data-display-mode="side"] {
+    width: min(88vw, 340px);
+  }
+
+  html.aozora-sidepanel-active body {
+    margin-right: 0 !important;
+  }
+}
