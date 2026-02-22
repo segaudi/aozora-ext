@@ -98,8 +98,42 @@ html.aozora-sidepanel-active body {
   padding: 10px 12px;
 }
 
+.aozora-controls-advanced {
+  padding: 0 10px 10px;
+}
+
 .aozora-span-2 {
   grid-column: span 2;
+}
+
+.aozora-advanced {
+  margin: 0 12px 10px;
+  border: 1px solid #d7dde6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.aozora-advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.aozora-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aozora-advanced > summary::after {
+  content: ">";
+  float: right;
+  color: #6b7280;
+}
+
+.aozora-advanced[open] > summary::after {
+  content: "v";
 }
 
 .aozora-duration-wrap {
@@ -120,7 +154,8 @@ html.aozora-sidepanel-active body {
 
 .aozora-controls button,
 .aozora-tooltip button,
-.aozora-item button {
+.aozora-item button,
+.aozora-llm-section button {
   border: 1px solid #b9c1cb;
   background: #fff;
   color: #233247;
@@ -132,12 +167,56 @@ html.aozora-sidepanel-active body {
 
 .aozora-controls button:hover,
 .aozora-tooltip button:hover,
-.aozora-item button:hover {
+.aozora-item button:hover,
+.aozora-llm-section button:hover {
   background: #f2f6ff;
 }
 
 .aozora-item button {
   white-space: nowrap;
+}
+
+.aozora-llm-section input,
+.aozora-llm-section textarea,
+.aozora-llm-section select {
+  border: 1px solid #b9c1cb;
+  background: #fff;
+  color: #233247;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+}
+
+.aozora-llm-section textarea {
+  resize: vertical;
+  min-height: 92px;
+}
+
+.aozora-llm-section button {
+  margin-top: 6px;
+  width: 100%;
+}
+
+.aozora-panel[data-kuromoji-raw="on"] .aozora-grammar-section,
+.aozora-panel[data-kuromoji-raw="on"] .aozora-personal-dictionary {
+  display: none;
+}
+
+.aozora-llm-pre {
+  margin: 4px 0 8px;
+  padding: 8px;
+  border: 1px solid #d7dde6;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .aozora-primary {

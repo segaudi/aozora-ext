@@ -1,6 +1,6 @@
-# Aozora Reading Helper (Version A, Offline)
+# Aozora Reading Helper (Version A)
 
-Chrome Extension (Manifest V3) that runs on `aozora.gr.jp` and helps beginner Japanese reading chunk-by-chunk (paragraph-like units), fully offline.
+Chrome Extension (Manifest V3) that runs on `aozora.gr.jp` and helps beginner Japanese reading chunk-by-chunk (paragraph-like units). Core mode is offline; optional LLM mode can be enabled with your API key.
 
 ## Features
 
@@ -21,6 +21,11 @@ Chrome Extension (Manifest V3) that runs on `aozora.gr.jp` and helps beginner Ja
   - score-based selection of likely unknown words
 - Grammar detection:
   - ~20 high-value rule patterns via regex matching
+- Optional LLM highlight mode:
+  - OpenAI/Gemini via extension background worker
+  - Gemini uses free-tier-friendly model fallback (`gemini-2.5-flash-lite` -> `gemini-2.5-flash` -> `gemma-3-27b-it`)
+  - explicit fetch by clicking `LLM Format Chunk`
+  - response JSON is normalized/validated against chunk text before highlighting
 - Right-side overlay panel:
   - vocab list: surface/base/reading/Chinese hint (if available)
   - grammar list: pattern + short Chinese explanation
@@ -57,6 +62,12 @@ npm run build
 - Build: `npm run build`
 - Test (sanity): `npm test`
 - Clean: `npm run clean`
+
+## Debug Console
+
+- A separate debug interface is available at extension options page (`debug.html`).
+- Open `chrome://extensions`, find this extension, click `Details`, then `Extension options`.
+- Enable `Debug logging` there to collect structured logs from content/background without cluttering the reader UI.
 
 ## Manual test checklist
 

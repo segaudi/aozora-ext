@@ -8,6 +8,7 @@ const distDir = path.join(root, "dist");
 async function copyAssets() {
   await cp(path.join(root, "src", "manifest.json"), path.join(distDir, "manifest.json"));
   await cp(path.join(root, "src", "content", "styles.css"), path.join(distDir, "styles.css"));
+  await cp(path.join(root, "src", "debug", "debug.html"), path.join(distDir, "debug.html"));
   await cp(
     path.join(root, "node_modules", "kuromoji", "build", "kuromoji.js"),
     path.join(distDir, "kuromoji.js")
@@ -23,11 +24,16 @@ async function main() {
   await mkdir(distDir, { recursive: true });
 
   await build({
-    entryPoints: [path.join(root, "src", "content", "index.js")],
+    entryPoints: {
+      content: path.join(root, "src", "content", "index.js"),
+      background: path.join(root, "src", "background.js"),
+      debug: path.join(root, "src", "debug", "debug.js")
+    },
     bundle: true,
     format: "iife",
     target: ["chrome114"],
-    outfile: path.join(distDir, "content.js"),
+    outdir: distDir,
+    entryNames: "[name]",
     sourcemap: false,
     minify: false,
     logLevel: "info"

@@ -2,7 +2,7 @@
 
 ## Goal
 
-`Aozora Reading Helper (Version A)` is a Manifest V3 content-script extension that runs fully offline on Aozora pages and supports chunk-based reading/study.
+`Aozora Reading Helper (Version A)` is a Manifest V3 content-script extension for Aozora pages with offline-first chunk-based reading/study and an optional LLM JSON highlight mode.
 
 ## Runtime Flow
 
@@ -57,11 +57,11 @@ Key in-memory state in `src/content/index.js`:
 - `displayMode`: `floating` or `side`.
 - `knownWords`, `knownGrammarIds`: suppression sets.
 - `knownWordEntries`, `knownGrammarEntries`: latest-first dictionary lists.
-- `cache`: chunk analysis cache (`tokens`, `source`).
+- `tokenCache`: tokenizer output cache (`tokens`, `source`).
+- `llmChunkCache` / `llmRuntimeCache`: persisted + in-memory LLM analysis caches.
 
 ## Non-goals in Version A
 
-- No network APIs.
-- No LLM use.
 - No backend service.
-- No global page rewrite or heavy layout manipulation.
+- No automatic page-wide rewriting.
+- No mandatory online dependency (offline heuristic mode remains available).

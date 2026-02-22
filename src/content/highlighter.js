@@ -65,6 +65,62 @@ function createHighlightSpan(options) {
   return span;
 }
 
+function findPositionByOffset(textNodes, globalOffset) {
+  let cursor = 0;
+  for (const node of textNodes) {
+    const len = node.nodeValue.length;
+    if (globalOffset <= cursor + len) {
+      return { node, offset: Math.max(0, globalOffset - cursor) };
+    }
+    cursor += len;
+  }
+
+  const lastNode = textNodes[textNodes.length - 1];
+  if (!lastNode) {
+    return null;
+  }
+  return { node: lastNode, offset: lastNode.nodeValue.length };
+}
+
+function findAnchoredStart(fullText, target, before, after) {
+  if (!target) {
+    return -1;
+  }
+
+  const hasBefore = Boolean(before);
+  const hasAfter = Boolean(after);
+  const hasAnchors = hasBefore || hasAfter;
+
+  if (hasBefore && hasAfter) {
+    const context = `${before}${target}${after}`;
+    const contextIndex = fullText.indexOf(context);
+    if (contextIndex >= 0) {
+      return contextIndex + before.length;
+    }
+  }
+
+  if (hasBefore) {
+    const context = `${before}${target}`;
+    const contextIndex = fullText.indexOf(context);
+    if (contextIndex >= 0) {
+      return contextIndex + before.length;
+    }
+  }
+
+  if (hasAfter) {
+    const context = `${target}${after}`;
+    const contextIndex = fullText.indexOf(context);
+    if (contextIndex >= 0) {
+      return contextIndex;
+    }
+  }
+
+  if (hasAnchors) {
+    return -1;
+  }
+  return fullText.indexOf(target);
+}
+
 export function clearHighlights(root) {
   const spans = [...root.querySelectorAll("span[data-aozora-hl='1']")];
   for (const span of spans) {
@@ -121,6 +177,44 @@ export function highlightLiteral(root, literal, options = {}) {
   }
 
   return highlighted;
+}
+
+export function highlightByContext(root, target, anchorBefore, anchorAfter, options = {}) {
+  const normalizedTarget = (target || "").trim();
+  if (!normalizedTarget) {
+    return [];
+  }
+
+  const textNodes = collectTextNodes(root);
+  if (!textNodes.length) {
+    return [];
+  }
+
+  const fullText = textNodes.map((node) => node.nodeValue || "").join("");
+  const startIndex = findAnchoredStart(fullText, normalizedTarget, anchorBefore || "", anchorAfter || "");
+  if (startIndex < 0) {
+    return [];
+  }
+
+  const endIndex = startIndex + normalizedTarget.length;
+  const startPos = findPositionByOffset(textNodes, startIndex);
+  const endPos = findPositionByOffset(textNodes, endIndex);
+  if (!startPos || !endPos) {
+    return [];
+  }
+
+  const range = document.createRange();
+  range.setStart(startPos.node, startPos.offset);
+  range.setEnd(endPos.node, endPos.offset);
+
+  const span = createHighlightSpan(options);
+  try {
+    range.surroundContents(span);
+  } catch {
+    return [];
+  }
+
+  return [span];
 }
 
 export function flashElement(el) {

@@ -58,6 +58,7 @@ Current tests cover:
 ## Debugging tips
 
 - Open page DevTools and filter logs by `[Aozora Helper]`.
+- For structured extension-level logs (content + background), open extension options (`debug.html`) and enable debug logging.
 - Check panel meta line for:
   - chunk index/total
   - window size

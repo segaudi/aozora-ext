@@ -1,6 +1,6 @@
 # Documentation Index
 
-This folder contains implementation notes for the current offline demo and handoff notes for the next iteration.
+This folder contains implementation notes for the current extension (offline-first with optional LLM mode) and handoff notes for next iterations.
 
 ## Files
 

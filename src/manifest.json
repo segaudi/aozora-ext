@@ -1,12 +1,30 @@
 {
   "manifest_version": 3,
-  "name": "Aozora Reading Helper (Offline)",
+  "name": "Aozora Reading Helper",
   "version": "0.1.0",
-  "description": "Chunk-based beginner Japanese reading helper for Aozora Bunko pages.",
+  "description": "Chunk-based Japanese reading helper for Aozora Bunko pages (offline-first with optional LLM mode).",
   "permissions": ["storage"],
   "host_permissions": [
     "https://www.aozora.gr.jp/*",
-    "http://www.aozora.gr.jp/*"
+    "http://www.aozora.gr.jp/*",
+    "https://api.openai.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "debug.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dict/*"],
+      "matches": [
+        "https://www.aozora.gr.jp/*",
+        "http://www.aozora.gr.jp/*"
+      ]
+    }
   ],
   "content_scripts": [
     {
