@@ -25,7 +25,8 @@ Chrome Extension (Manifest V3) that runs on `aozora.gr.jp` and helps beginner Ja
   - OpenAI/Gemini via extension background worker
   - Gemini uses free-tier-friendly model fallback (`gemini-2.5-flash-lite` -> `gemini-2.5-flash` -> `gemma-3-27b-it`)
   - explicit fetch by clicking `LLM Format Chunk`
-  - response JSON is normalized/validated against chunk text before highlighting
+  - adjustable `Max chunks per batch` and `Preload ahead chunks` controls for latency vs throughput tuning
+  - response JSON (translation + dense vocab/grammar + sentence analysis) is normalized/validated against chunk text before highlighting
 - Right-side overlay panel:
   - vocab list: surface/base/reading/Chinese hint (if available)
   - grammar list: pattern + short Chinese explanation

@@ -1,7 +1,20 @@
 const RAW_TOKEN_PUNCT_RE = /^[\s。、！？・「」『』（）【】〈〉《》〔〕…―〜♪，．・]+$/u;
+const MAX_LLM_VOCAB_ITEMS = 120;
+const MAX_LLM_GRAMMAR_ITEMS = 120;
+const MAX_LLM_SENTENCE_ITEMS = 80;
 
 function toCleanString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function toCleanStringList(value, maxItems = 12) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => toCleanString(item))
+    .filter(Boolean)
+    .slice(0, maxItems);
 }
 
 function extractJsonPayloadText(responseText) {
@@ -129,7 +142,7 @@ function normalizeLlmVocabItems(payload, chunkText) {
       anchorAfter
     });
   }
-  return words.slice(0, 30);
+  return words.slice(0, MAX_LLM_VOCAB_ITEMS);
 }
 
 function normalizeLlmGrammarItems(payload, chunkText) {
@@ -171,19 +184,70 @@ function normalizeLlmGrammarItems(payload, chunkText) {
       anchorAfter
     });
   }
-  return patterns.slice(0, 30);
+  return patterns.slice(0, MAX_LLM_GRAMMAR_ITEMS);
+}
+
+function normalizeLlmSentenceItems(payload, chunkText) {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  const rows = [];
+  for (const item of payload) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const sentence = toCleanString(item.sentence_in_text || item.sentence_ja || item.sentence || item.jp_text);
+    const anchorBefore = toCleanString(item.anchor_before);
+    const anchorAfter = toCleanString(item.anchor_after);
+    if (!sentence) {
+      continue;
+    }
+    if (!chunkText.includes(sentence)) {
+      continue;
+    }
+    if (findAnchoredIndex(chunkText, sentence, anchorBefore, anchorAfter) < 0) {
+      continue;
+    }
+
+    const translationZh = toCleanString(item.translation_zh || item.zh_translation || item.translation);
+    const structureZh = toCleanString(item.structure_zh || item.structure_note_zh || item.structure);
+    const grammarHints = toCleanStringList(item.grammar_points || item.grammar_hints || item.grammar, 10);
+    const vocabHints = toCleanStringList(item.vocab_focus || item.vocab_hints || item.vocab, 12);
+
+    rows.push({
+      sentence,
+      translationZh,
+      structureZh,
+      grammarHints,
+      vocabHints,
+      anchorBefore,
+      anchorAfter
+    });
+  }
+  return rows.slice(0, MAX_LLM_SENTENCE_ITEMS);
+}
+
+function normalizeLlmTranslation(value) {
+  return toCleanString(value);
+}
+
+function normalizeLlmChunkResultPayload(payload, chunkText) {
+  return {
+    words: normalizeLlmVocabItems(payload?.vocab, chunkText),
+    patterns: normalizeLlmGrammarItems(payload?.grammar, chunkText),
+    translationZh: normalizeLlmTranslation(payload?.translation_zh || payload?.chunk_translation_zh),
+    sentenceAnalyses: normalizeLlmSentenceItems(payload?.sentence_analysis, chunkText)
+  };
 }
 
 function normalizeLlmChunkPayload(responseText, chunkText) {
   const payload = parseJsonPayload(responseText);
   if (!payload || typeof payload !== "object") {
-    return { words: [], patterns: [] };
+    return { words: [], patterns: [], translationZh: "", sentenceAnalyses: [] };
   }
 
-  return {
-    words: normalizeLlmVocabItems(payload.vocab, chunkText),
-    patterns: normalizeLlmGrammarItems(payload.grammar, chunkText)
-  };
+  return normalizeLlmChunkResultPayload(payload, chunkText);
 }
 
 export function normalizeLlmBatchPayload(responseText, batchChunks) {
@@ -193,7 +257,7 @@ export function normalizeLlmBatchPayload(responseText, batchChunks) {
 
   if (!payload || typeof payload !== "object") {
     for (const chunk of batchChunks) {
-      output.set(chunk.id, { words: [], patterns: [] });
+      output.set(chunk.id, { words: [], patterns: [], translationZh: "", sentenceAnalyses: [] });
     }
     return output;
   }
@@ -208,14 +272,11 @@ export function normalizeLlmBatchPayload(responseText, batchChunks) {
       if (!chunk) {
         continue;
       }
-      output.set(chunkId, {
-        words: normalizeLlmVocabItems(item.vocab, chunk.text),
-        patterns: normalizeLlmGrammarItems(item.grammar, chunk.text)
-      });
+      output.set(chunkId, normalizeLlmChunkResultPayload(item, chunk.text));
     }
     for (const chunk of batchChunks) {
       if (!output.has(chunk.id)) {
-        output.set(chunk.id, { words: [], patterns: [] });
+        output.set(chunk.id, { words: [], patterns: [], translationZh: "", sentenceAnalyses: [] });
       }
     }
     return output;
@@ -227,7 +288,7 @@ export function normalizeLlmBatchPayload(responseText, batchChunks) {
   }
 
   for (const chunk of batchChunks) {
-    output.set(chunk.id, { words: [], patterns: [] });
+    output.set(chunk.id, { words: [], patterns: [], translationZh: "", sentenceAnalyses: [] });
   }
   return output;
 }

@@ -49,12 +49,27 @@ test("normalizeLlmBatchPayload accepts anchored vocab/grammar from fixture text"
   const matchedText = chunkText.slice(wordCtx.start, Math.min(chunkText.length, wordCtx.start + Math.max(surface.length + 8, 12)));
   const grammarCtx = contextAround(chunkText, matchedText);
   assert.ok(grammarCtx.start >= 0);
+  const sentenceText = matchedText;
+  const sentenceCtx = contextAround(chunkText, sentenceText);
+  assert.ok(sentenceCtx.start >= 0);
 
   const response = {
     template_version: "batch_v1",
     results: [
       {
         chunk_id: "chunk-0",
+        translation_zh: "这是整段的中文翻译。",
+        sentence_analysis: [
+          {
+            sentence_in_text: sentenceText,
+            translation_zh: "这是句子的中文翻译。",
+            structure_zh: "主语 + 谓语结构。",
+            grammar_points: ["は (主题)", "です (判断)"],
+            vocab_focus: [surface],
+            anchor_before: sentenceCtx.before,
+            anchor_after: sentenceCtx.after
+          }
+        ],
         vocab: [
           {
             surface_in_text: surface,
@@ -87,6 +102,10 @@ test("normalizeLlmBatchPayload accepts anchored vocab/grammar from fixture text"
   assert.equal(result.words[0].surface, surface);
   assert.equal(result.patterns.length, 1);
   assert.ok(result.patterns[0].id.startsWith("llm-"));
+  assert.equal(result.translationZh, "这是整段的中文翻译。");
+  assert.equal(result.sentenceAnalyses.length, 1);
+  assert.equal(result.sentenceAnalyses[0].sentence, sentenceText.trim());
+  assert.equal(result.sentenceAnalyses[0].translationZh, "这是句子的中文翻译。");
 });
 
 test("normalizeLlmBatchPayload grammar IDs are stable across ordering", () => {
@@ -153,6 +172,8 @@ test("normalizeLlmBatchPayload rejects mismatched anchors", () => {
 
   const parsed = normalizeLlmBatchPayload(response, [{ id: "c0", text: chunkText }]).get("c0");
   assert.equal(parsed.words.length, 0);
+  assert.equal(parsed.translationZh, "");
+  assert.deepEqual(parsed.sentenceAnalyses, []);
 });
 
 test("Kuromoji raw-mode helpers dedupe by surface and skip punctuation", () => {

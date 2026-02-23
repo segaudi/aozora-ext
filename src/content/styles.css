@@ -236,6 +236,40 @@ html.aozora-sidepanel-active body {
   border-top: 1px solid #e3e3e3;
 }
 
+.aozora-translation-text {
+  border: 1px solid #d7dde6;
+  border-radius: 8px;
+  background: #fff;
+  color: #243447;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.aozora-sentence-item {
+  border: 1px solid #d7dde6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 7px 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.aozora-sentence-line {
+  font-size: 11px;
+  color: #334155;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.aozora-sentence-ja {
+  font-weight: 700;
+  color: #1f2937;
+}
+
 .aozora-section-title {
   margin-bottom: 6px;
   font-size: 13px;

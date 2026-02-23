@@ -25,46 +25,72 @@ const LLM_CHUNK_CACHE_KEY = "aozoraLlmChunkCacheV1";
 const PROMPT_PLACEHOLDER = "<%CONTENT%>";
 const LEARNER_PROFILE_PLACEHOLDER = "<%LEARNER_PROFILE%>";
 const DEFAULT_LEARNER_PROFILE = "a Chinese-speaking beginner of N5 level";
-const LLM_BATCH_TARGET_CHARS = 10 * ESTIMATED_CHARS_PER_MINUTE;
+const LLM_BATCH_TARGET_CHARS_COLD = 2 * ESTIMATED_CHARS_PER_MINUTE;
+const LLM_BATCH_TARGET_CHARS_BALANCED = 5 * ESTIMATED_CHARS_PER_MINUTE;
+const LLM_BATCH_TARGET_CHARS_WARM = 10 * ESTIMATED_CHARS_PER_MINUTE;
+const LLM_BATCH_MAX_CHUNKS_COLD = 1;
+const LLM_BATCH_MAX_CHUNKS_BALANCED = 2;
+const LLM_BATCH_MAX_CHUNKS_WARM = 4;
+const LLM_BATCH_LOOKAHEAD = 8;
+const LLM_BATCH_MAX_CHUNKS_OPTIONS = [1, 2, 3, 4, 5, 6];
+const DEFAULT_LLM_BATCH_MAX_CHUNKS = 4;
+const LLM_PRELOAD_AHEAD_OPTIONS = [0, 1, 2, 3, 4];
+const DEFAULT_LLM_PRELOAD_AHEAD = 2;
+const LLM_PREFETCH_IDLE_DELAY_MS = 250;
 const LLM_CHUNK_CACHE_LIMIT = 500;
 const DEFAULT_LLM_TEMPLATE = `SYSTEM:
-You are a Japanese reading tutor for Chinese-speaking learners.
+You are a Japanese reading tutor for Chinese-speaking beginners.
 Learner profile: ${LEARNER_PROFILE_PLACEHOLDER}
-Given MULTIPLE Japanese chunks, output key vocabulary and grammar patterns with concise Chinese explanations.
+Given MULTIPLE Japanese chunks, output dense beginner-friendly analysis in Chinese.
 IMPORTANT:
 - Output MUST be valid JSON only (no extra text).
 - You MUST return one result object for every input chunk_id.
-- All fields that reference original text MUST be exact substrings copied from the matching chunk text (character-for-character).
-  This includes: surface_in_text, matched_text, anchor_before, anchor_after.
-- Select items that are most important for understanding. Avoid proper nouns/time numbers unless essential.
 - Do not mix text across chunks.
-
+- All fields that reference original text MUST be exact substrings copied from the matching chunk text.
+  This includes: surface_in_text, matched_text, sentence_in_text, anchor_before, anchor_after.
+- Beginner density requirement:
+  1) cover almost every sentence with sentence_analysis (target >= 80% of sentences in each chunk),
+  2) include many useful vocab items (content words + common function words/pattern chunks),
+  3) include many grammar items tied to real spans from text.
+- Keep each explanation concise but specific.
 
 JSON schema:
 {
-  "template_version": "batch_v1",
+  "template_version": "batch_v2",
   "results": [
     {
       "chunk_id": "<same as input chunk_id>",
+      "translation_zh": "<natural Chinese translation of the whole chunk>",
+      "sentence_analysis": [
+        {
+          "sentence_in_text": "<exact sentence substring from this chunk>",
+          "translation_zh": "<Chinese translation for this sentence>",
+          "structure_zh": "<brief sentence structure analysis in Chinese>",
+          "grammar_points": ["<key grammar 1>", "<key grammar 2>"],
+          "vocab_focus": ["<beginner-important word/phrase 1>", "<word/phrase 2>"],
+          "anchor_before": "<6-16 chars before sentence, exact or empty at start>",
+          "anchor_after": "<6-16 chars after sentence, exact or empty at end>"
+        }
+      ],
       "vocab": [
         {
           "surface_in_text": "<exact substring>",
           "reading_hira": "<hiragana reading>",
           "lemma": "<dictionary form (kanji if standard)>",
           "zh_gloss": ["<short Chinese meaning 1>", "<meaning 2 optional>"],
-          "note_zh": "<1 sentence contextual note>",
-          "anchor_before": "<6-12 chars before surface in the chunk, exact>",
-          "anchor_after": "<6-12 chars after surface in the chunk, exact>"
+          "note_zh": "<short contextual note for beginners>",
+          "anchor_before": "<6-16 chars before surface in the chunk, exact>",
+          "anchor_after": "<6-16 chars after surface in the chunk, exact>"
         }
       ],
       "grammar": [
         {
-          "title_zh": "<short name>",
-          "explain_zh": "<1-2 sentence explanation in Chinese>",
-          "example_ja": "<one simple Japanese example sentence>",
-          "matched_text": "<exact substring from chunk, ideally 12-30 chars>",
-          "anchor_before": "<6-12 chars before matched_text, exact>",
-          "anchor_after": "<6-12 chars after matched_text, exact>"
+          "title_zh": "<short grammar label>",
+          "explain_zh": "<1-2 sentence beginner explanation in Chinese>",
+          "example_ja": "<simple Japanese example sentence>",
+          "matched_text": "<exact substring from chunk>",
+          "anchor_before": "<6-16 chars before matched_text, exact>",
+          "anchor_after": "<6-16 chars after matched_text, exact>"
         }
       ]
     }
@@ -93,6 +119,12 @@ function isLegacySingleChunkTemplate(template) {
   if (/chunk\s*=\s*["']?\s*<%CONTENT%>/i.test(text)) {
     return true;
   }
+  if (/"template_version"\s*:\s*"batch_v1"/i.test(text)) {
+    return true;
+  }
+  if (text.includes("output key vocabulary and grammar patterns with concise Chinese explanations")) {
+    return true;
+  }
   return false;
 }
 
@@ -119,6 +151,8 @@ const state = {
   llmProvider: "openai",
   llmOpenaiModel: DEFAULT_OPENAI_MODEL,
   llmOpenaiServiceTier: DEFAULT_OPENAI_SERVICE_TIER,
+  llmBatchMaxChunks: DEFAULT_LLM_BATCH_MAX_CHUNKS,
+  llmPreloadAhead: DEFAULT_LLM_PRELOAD_AHEAD,
   llmLearnerProfile: DEFAULT_LEARNER_PROFILE,
   llmPromptTemplate: DEFAULT_LLM_TEMPLATE,
   llmApiKeys: {
@@ -147,7 +181,11 @@ const state = {
   currentWords: [],
   currentPatterns: [],
   currentRawTokens: [],
-  lastTokenizeSource: "pending"
+  currentTranslationZh: "",
+  currentSentenceAnalyses: [],
+  lastTokenizeSource: "pending",
+  llmPrefetchTimer: null,
+  llmPrefetchInFlight: false
 };
 
 function createPanel() {
@@ -184,6 +222,12 @@ function createPanel() {
       return `<option value="${mode}"${mode === state.analysisMode ? " selected" : ""}>${label}</option>`;
     })
     .join("");
+  const llmBatchMaxOptions = LLM_BATCH_MAX_CHUNKS_OPTIONS
+    .map((count) => `<option value="${count}"${count === state.llmBatchMaxChunks ? " selected" : ""}>${count}</option>`)
+    .join("");
+  const llmPreloadAheadOptions = LLM_PRELOAD_AHEAD_OPTIONS
+    .map((count) => `<option value="${count}"${count === state.llmPreloadAhead ? " selected" : ""}>${count}</option>`)
+    .join("");
 
   panel.innerHTML = `
     <div class="aozora-panel-header">
@@ -214,6 +258,11 @@ function createPanel() {
       </div>
     </details>
     <div class="aozora-meta" data-role="meta"></div>
+    <div class="aozora-section aozora-translation-section">
+      <div class="aozora-section-title">Chunk Translation</div>
+      <div class="aozora-translation-text" data-role="translation-text"></div>
+      <div class="aozora-list aozora-compact-list" data-role="sentence-analysis-list"></div>
+    </div>
     <div class="aozora-section aozora-vocab-section">
       <div class="aozora-section-title" data-role="vocab-title">Vocabulary</div>
       <div class="aozora-list" data-role="vocab-list"></div>
@@ -242,6 +291,14 @@ function createPanel() {
       <label class="aozora-duration-wrap">
         <span>OpenAI tier</span>
         <select data-action="llm-openai-tier">${llmTierOptions}</select>
+      </label>
+      <label class="aozora-duration-wrap">
+        <span>Max chunks per batch</span>
+        <select data-action="llm-batch-max">${llmBatchMaxOptions}</select>
+      </label>
+      <label class="aozora-duration-wrap">
+        <span>Preload ahead chunks</span>
+        <select data-action="llm-preload-ahead">${llmPreloadAheadOptions}</select>
       </label>
       <label class="aozora-duration-wrap">
         <span>Learner profile</span>
@@ -428,6 +485,9 @@ function updateVocabSectionTitle() {
 function applyAnalysisMode(nextMode) {
   const mode = ANALYSIS_MODES.includes(nextMode) ? nextMode : "kuromoji";
   state.analysisMode = mode;
+  if (mode !== "llm") {
+    clearLlmPrefetchTimer();
+  }
   if (state.ui?.analysisModeSelectEl) {
     state.ui.analysisModeSelectEl.value = mode;
   }
@@ -436,6 +496,9 @@ function applyAnalysisMode(nextMode) {
 
 function applyKuromojiRawMode(nextValue) {
   state.kuromojiRawMode = Boolean(nextValue);
+  if (state.kuromojiRawMode) {
+    clearLlmPrefetchTimer();
+  }
   if (state.panel) {
     state.panel.setAttribute("data-kuromoji-raw", state.kuromojiRawMode ? "on" : "off");
   }
@@ -443,6 +506,14 @@ function applyKuromojiRawMode(nextValue) {
     state.ui.kuromojiToggleButtonEl.textContent = state.kuromojiRawMode ? "Kuromoji Raw: On" : "Kuromoji Raw: Off";
   }
   updateVocabSectionTitle();
+}
+
+function parseConfigInt(value, allowedValues, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return allowedValues.includes(numeric) ? numeric : fallback;
 }
 
 function normalizeStoredLlmSettings(raw) {
@@ -454,12 +525,24 @@ function normalizeStoredLlmSettings(raw) {
   const openaiServiceTier = OPENAI_SERVICE_TIERS.includes(value.openaiServiceTier)
     ? value.openaiServiceTier
     : DEFAULT_OPENAI_SERVICE_TIER;
+  const llmBatchMaxChunks = parseConfigInt(
+    value.llmBatchMaxChunks,
+    LLM_BATCH_MAX_CHUNKS_OPTIONS,
+    DEFAULT_LLM_BATCH_MAX_CHUNKS
+  );
+  const llmPreloadAhead = parseConfigInt(
+    value.llmPreloadAhead,
+    LLM_PRELOAD_AHEAD_OPTIONS,
+    DEFAULT_LLM_PRELOAD_AHEAD
+  );
   const analysisMode = ANALYSIS_MODES.includes(value.analysisMode) ? value.analysisMode : "kuromoji";
   return {
     analysisMode,
     provider,
     openaiModel,
     openaiServiceTier,
+    llmBatchMaxChunks,
+    llmPreloadAhead,
     learnerProfile: typeof value.learnerProfile === "string" && value.learnerProfile.trim()
       ? value.learnerProfile.trim()
       : DEFAULT_LEARNER_PROFILE,
@@ -498,6 +581,8 @@ async function loadLlmSettings() {
   state.llmProvider = settings.provider;
   state.llmOpenaiModel = settings.openaiModel;
   state.llmOpenaiServiceTier = settings.openaiServiceTier;
+  state.llmBatchMaxChunks = settings.llmBatchMaxChunks;
+  state.llmPreloadAhead = settings.llmPreloadAhead;
   state.llmLearnerProfile = settings.learnerProfile;
   state.llmPromptTemplate = settings.promptTemplate;
   state.llmApiKeys = {
@@ -517,6 +602,8 @@ async function persistLlmSettings() {
     provider: state.llmProvider,
     openaiModel: state.llmOpenaiModel,
     openaiServiceTier: state.llmOpenaiServiceTier,
+    llmBatchMaxChunks: state.llmBatchMaxChunks,
+    llmPreloadAhead: state.llmPreloadAhead,
     learnerProfile: state.llmLearnerProfile,
     promptTemplate: state.llmPromptTemplate,
     openaiApiKey: state.llmApiKeys.openai,
@@ -544,12 +631,16 @@ function normalizeStoredLlmAnalysisEntry(raw) {
   }
   const words = Array.isArray(raw.words) ? raw.words : [];
   const patterns = Array.isArray(raw.patterns) ? raw.patterns : [];
+  const translationZh = typeof raw.translationZh === "string" ? raw.translationZh : "";
+  const sentenceAnalyses = Array.isArray(raw.sentenceAnalyses) ? raw.sentenceAnalyses : [];
   const source = typeof raw.source === "string" && raw.source ? raw.source : "llm-cache";
   const updatedAt = Number(raw.updatedAt);
   return {
     source,
     words,
     patterns,
+    translationZh,
+    sentenceAnalyses,
     rawTokens: [],
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now()
   };
@@ -689,6 +780,12 @@ function renderLlmState() {
     state.ui.llmOpenaiTierSelectEl.value = state.llmOpenaiServiceTier;
     state.ui.llmOpenaiTierSelectEl.disabled = state.llmProvider !== "openai";
   }
+  if (state.ui.llmBatchMaxSelectEl) {
+    state.ui.llmBatchMaxSelectEl.value = String(state.llmBatchMaxChunks);
+  }
+  if (state.ui.llmPreloadAheadSelectEl) {
+    state.ui.llmPreloadAheadSelectEl.value = String(state.llmPreloadAhead);
+  }
   if (state.ui.llmLearnerProfileInputEl) {
     state.ui.llmLearnerProfileInputEl.value = state.llmLearnerProfile;
   }
@@ -751,24 +848,83 @@ function callLlmProvider(payload) {
   });
 }
 
-function buildLlmBatchChunks(targetChunk) {
-  const targetIndex = state.chunks.findIndex((chunk) => chunk.id === targetChunk.id);
-  if (targetIndex < 0) {
-    return [targetChunk];
+function hasCachedLlmAnalysisForChunk(chunk) {
+  if (!chunk) {
+    return false;
+  }
+  const cacheKey = getLlmAnalysisCacheKey(chunk);
+  return Boolean(getCachedLlmChunkAnalysis(cacheKey));
+}
+
+function chooseLlmBatchStrategy(targetChunk, lookaheadChunks) {
+  const targetCached = hasCachedLlmAnalysisForChunk(targetChunk);
+  const aheadChunks = lookaheadChunks.slice(1);
+  const cachedAheadCount = aheadChunks.filter((chunk) => hasCachedLlmAnalysisForChunk(chunk)).length;
+  const uncachedAheadCount = aheadChunks.length - cachedAheadCount;
+  const maxCap = parseConfigInt(
+    state.llmBatchMaxChunks,
+    LLM_BATCH_MAX_CHUNKS_OPTIONS,
+    DEFAULT_LLM_BATCH_MAX_CHUNKS
+  );
+
+  if (!targetCached && cachedAheadCount === 0) {
+    return {
+      strategy: "cold_start",
+      batchTargetChars: LLM_BATCH_TARGET_CHARS_COLD,
+      maxChunks: Math.min(maxCap, LLM_BATCH_MAX_CHUNKS_COLD),
+      cachedAheadCount,
+      uncachedAheadCount
+    };
   }
 
+  if (cachedAheadCount >= uncachedAheadCount) {
+    return {
+      strategy: "warm_prefetch",
+      batchTargetChars: LLM_BATCH_TARGET_CHARS_WARM,
+      maxChunks: Math.min(maxCap, LLM_BATCH_MAX_CHUNKS_WARM),
+      cachedAheadCount,
+      uncachedAheadCount
+    };
+  }
+
+  return {
+    strategy: "balanced",
+    batchTargetChars: LLM_BATCH_TARGET_CHARS_BALANCED,
+    maxChunks: Math.min(maxCap, LLM_BATCH_MAX_CHUNKS_BALANCED),
+    cachedAheadCount,
+    uncachedAheadCount
+  };
+}
+
+function buildLlmBatchPlan(targetChunk) {
+  const targetIndex = state.chunks.findIndex((chunk) => chunk.id === targetChunk.id);
+  if (targetIndex < 0) {
+    return {
+      strategy: "single_fallback",
+      batchTargetChars: Math.max(1, Number(targetChunk?.charCount || 0)),
+      maxChunks: 1,
+      cachedAheadCount: 0,
+      uncachedAheadCount: 0,
+      chunks: [targetChunk]
+    };
+  }
+
+  const lookaheadChunks = state.chunks.slice(targetIndex, targetIndex + LLM_BATCH_LOOKAHEAD);
+  const strategy = chooseLlmBatchStrategy(targetChunk, lookaheadChunks);
   const batch = [];
   let charBudget = 0;
-  for (let index = targetIndex; index < state.chunks.length; index += 1) {
-    const chunk = state.chunks[index];
+  for (const chunk of lookaheadChunks) {
     batch.push(chunk);
     charBudget += chunk.charCount;
-    if (charBudget >= LLM_BATCH_TARGET_CHARS) {
+    if (batch.length >= strategy.maxChunks || charBudget >= strategy.batchTargetChars) {
       break;
     }
   }
 
-  return batch.length ? batch : [targetChunk];
+  return {
+    ...strategy,
+    chunks: batch.length ? batch : [targetChunk]
+  };
 }
 
 function buildLlmBatchPayload(chunks) {
@@ -779,10 +935,24 @@ function buildLlmBatchPayload(chunks) {
   );
 }
 
+function hasMeaningfulLlmAnalysis(analysis) {
+  if (!analysis || typeof analysis !== "object") {
+    return false;
+  }
+  const wordsCount = Array.isArray(analysis.words) ? analysis.words.length : 0;
+  const patternsCount = Array.isArray(analysis.patterns) ? analysis.patterns.length : 0;
+  const sentencesCount = Array.isArray(analysis.sentenceAnalyses) ? analysis.sentenceAnalyses.length : 0;
+  const hasTranslation = Boolean(String(analysis.translationZh || "").trim());
+  return wordsCount > 0 || patternsCount > 0 || sentencesCount > 0 || hasTranslation;
+}
+
 function getCachedLlmChunkAnalysis(cacheKey) {
   const inMemory = state.llmRuntimeCache.get(cacheKey);
-  if (inMemory) {
+  if (hasMeaningfulLlmAnalysis(inMemory)) {
     return inMemory;
+  }
+  if (inMemory) {
+    state.llmRuntimeCache.delete(cacheKey);
   }
   const persisted = state.llmChunkCache.get(cacheKey);
   if (!persisted) {
@@ -792,8 +962,15 @@ function getCachedLlmChunkAnalysis(cacheKey) {
     source: persisted.source || `llm-${state.llmProvider}-cache`,
     words: Array.isArray(persisted.words) ? persisted.words : [],
     patterns: Array.isArray(persisted.patterns) ? persisted.patterns : [],
+    translationZh: typeof persisted.translationZh === "string" ? persisted.translationZh : "",
+    sentenceAnalyses: Array.isArray(persisted.sentenceAnalyses) ? persisted.sentenceAnalyses : [],
     rawTokens: []
   };
+  if (!hasMeaningfulLlmAnalysis(analysis)) {
+    state.llmChunkCache.delete(cacheKey);
+    state.llmChunkCacheDirty = true;
+    return null;
+  }
   state.llmRuntimeCache.set(cacheKey, analysis);
   trimLlmRuntimeCacheInMemory();
   return analysis;
@@ -805,6 +982,8 @@ async function cacheLlmChunkAnalysis(cacheKey, analysis, options = {}) {
     source: analysis.source || `llm-${state.llmProvider}`,
     words: Array.isArray(analysis.words) ? analysis.words : [],
     patterns: Array.isArray(analysis.patterns) ? analysis.patterns : [],
+    translationZh: typeof analysis.translationZh === "string" ? analysis.translationZh : "",
+    sentenceAnalyses: Array.isArray(analysis.sentenceAnalyses) ? analysis.sentenceAnalyses : [],
     rawTokens: []
   };
   state.llmRuntimeCache.set(cacheKey, normalizedAnalysis);
@@ -813,6 +992,8 @@ async function cacheLlmChunkAnalysis(cacheKey, analysis, options = {}) {
     source: normalizedAnalysis.source,
     words: normalizedAnalysis.words,
     patterns: normalizedAnalysis.patterns,
+    translationZh: normalizedAnalysis.translationZh,
+    sentenceAnalyses: normalizedAnalysis.sentenceAnalyses,
     updatedAt: Date.now()
   });
   state.llmChunkCacheDirty = true;
@@ -821,7 +1002,7 @@ async function cacheLlmChunkAnalysis(cacheKey, analysis, options = {}) {
   }
 }
 
-async function requestLlmForBatch(batchChunks) {
+async function requestLlmForBatch(batchChunks, batchPlan = null) {
   const apiKey = String(state.llmApiKeys[state.llmProvider] || "").trim();
   if (!apiKey) {
     throw new Error("Enter an API key for the selected provider.");
@@ -850,6 +1031,11 @@ async function requestLlmForBatch(batchChunks) {
       : {}),
     chunkCount: batchChunks.length,
     chunkIds: batchChunks.map((item) => item.id),
+    batchStrategy: batchPlan?.strategy || "unknown",
+    batchTargetChars: batchPlan?.batchTargetChars || 0,
+    batchMaxChunks: batchPlan?.maxChunks || 0,
+    batchCachedAheadCount: batchPlan?.cachedAheadCount ?? null,
+    batchUncachedAheadCount: batchPlan?.uncachedAheadCount ?? null,
     promptLength: prompt.length,
     promptPreview: prompt
   });
@@ -1118,6 +1304,71 @@ function scrollToPattern(patternId) {
   }
 }
 
+function renderTranslationSection() {
+  const translationEl = state.ui.translationTextEl;
+  const sentenceListEl = state.ui.sentenceAnalysisListEl;
+  if (!translationEl || !sentenceListEl) {
+    return;
+  }
+
+  sentenceListEl.replaceChildren();
+  if (state.kuromojiRawMode || state.analysisMode !== "llm") {
+    translationEl.textContent = "Chunk translation and sentence structure are shown in LLM mode.";
+    return;
+  }
+
+  const translation = String(state.currentTranslationZh || "").trim();
+  translationEl.textContent = translation || "No chunk translation returned.";
+
+  if (!state.currentSentenceAnalyses.length) {
+    const empty = document.createElement("div");
+    empty.className = "aozora-list-empty";
+    empty.textContent = "No sentence-level analysis returned for this chunk.";
+    sentenceListEl.appendChild(empty);
+    return;
+  }
+
+  for (const row of state.currentSentenceAnalyses) {
+    const item = document.createElement("div");
+    item.className = "aozora-sentence-item";
+
+    const sentenceJa = document.createElement("div");
+    sentenceJa.className = "aozora-sentence-line aozora-sentence-ja";
+    sentenceJa.textContent = `JP: ${row.sentence}`;
+    item.appendChild(sentenceJa);
+
+    if (row.translationZh) {
+      const translationZh = document.createElement("div");
+      translationZh.className = "aozora-sentence-line";
+      translationZh.textContent = `ZH: ${row.translationZh}`;
+      item.appendChild(translationZh);
+    }
+
+    if (row.structureZh) {
+      const structure = document.createElement("div");
+      structure.className = "aozora-sentence-line";
+      structure.textContent = `Structure: ${row.structureZh}`;
+      item.appendChild(structure);
+    }
+
+    if (Array.isArray(row.grammarHints) && row.grammarHints.length) {
+      const grammar = document.createElement("div");
+      grammar.className = "aozora-sentence-line";
+      grammar.textContent = `Grammar: ${row.grammarHints.join(" / ")}`;
+      item.appendChild(grammar);
+    }
+
+    if (Array.isArray(row.vocabHints) && row.vocabHints.length) {
+      const vocab = document.createElement("div");
+      vocab.className = "aozora-sentence-line";
+      vocab.textContent = `Vocab: ${row.vocabHints.join(" / ")}`;
+      item.appendChild(vocab);
+    }
+
+    sentenceListEl.appendChild(item);
+  }
+}
+
 function renderVocabularyList() {
   const list = state.ui.vocabListEl;
   list.replaceChildren();
@@ -1300,12 +1551,30 @@ function renderPersonalDictionary() {
   }
 }
 
+function getLlmCacheStatusLabel(chunk) {
+  if (state.kuromojiRawMode || state.analysisMode !== "llm" || !chunk) {
+    return "";
+  }
+  const cacheKey = getLlmAnalysisCacheKey(chunk);
+  if (state.llmInflightByCacheKey.has(cacheKey)) {
+    return "LLM cache: loading";
+  }
+  if (state.llmPrefetchInFlight) {
+    return "LLM preload: running";
+  }
+  if (hasCachedLlmAnalysisForChunk(chunk)) {
+    return "LLM cache: hit";
+  }
+  return "LLM cache: miss";
+}
+
 function updateMetaText(tokenizeSource, chunk) {
   state.lastTokenizeSource = tokenizeSource;
 
   const modeLabel = MODE_LIMITS[state.mode].label;
   const displayModeLabel = state.displayMode === "side" ? "Side panel" : "Floating";
   const chunkText = `Chunk ${state.currentIndex + 1}/${state.chunks.length}`;
+  const cacheStatusText = getLlmCacheStatusLabel(chunk);
   const windowText = `Window: ${state.durationMinutes} min`;
   const sizeText = `~${chunk.charCount} chars`;
   const sourceText =
@@ -1317,7 +1586,12 @@ function updateMetaText(tokenizeSource, chunk) {
     : state.analysisMode === "llm"
       ? "Analysis: LLM JSON"
       : `Mode: ${modeLabel}`;
-  setPanelMeta(`${chunkText} · ${windowText} · ${sizeText} · ${analysisText} · Panel: ${displayModeLabel} · ${sourceText}`);
+  const metaParts = [chunkText];
+  if (cacheStatusText) {
+    metaParts.push(cacheStatusText);
+  }
+  metaParts.push(windowText, sizeText, analysisText, `Panel: ${displayModeLabel}`, sourceText);
+  setPanelMeta(metaParts.join(" · "));
 
   const modeButton = state.ui?.modeToggleButtonEl;
   if (modeButton) {
@@ -1367,6 +1641,7 @@ function getLlmAnalysisCacheKey(chunk) {
 
 async function getLlmChunkAnalysis(chunk, options = {}) {
   const allowRequest = options.allowRequest === true;
+  const isPrefetch = options.prefetch === true;
   const cacheKey = getLlmAnalysisCacheKey(chunk);
   const cached = getCachedLlmChunkAnalysis(cacheKey);
   if (cached) {
@@ -1379,7 +1654,9 @@ async function getLlmChunkAnalysis(chunk, options = {}) {
       cacheKey,
       chunkId: chunk.id,
       vocabCount: cached.words.length,
-      grammarCount: cached.patterns.length
+      grammarCount: cached.patterns.length,
+      sentenceCount: Array.isArray(cached.sentenceAnalyses) ? cached.sentenceAnalyses.length : 0,
+      hasTranslation: Boolean(cached.translationZh)
     });
     renderLlmState();
     return cached;
@@ -1397,27 +1674,43 @@ async function getLlmChunkAnalysis(chunk, options = {}) {
       source: `llm-${state.llmProvider}-pending`,
       words: [],
       patterns: [],
-      rawTokens: []
+      rawTokens: [],
+      translationZh: "",
+      sentenceAnalyses: []
     };
   }
 
   const task = (async () => {
-    state.llmBusy = true;
-    state.llmStatus = "Sending batch request for LLM highlight mode...";
-    sendDebugLog("content.llm", "info", "request.start", { chunkId: chunk.id, cacheKey });
-    renderLlmState();
-    await persistLlmSettings();
+    if (!isPrefetch) {
+      state.llmBusy = true;
+      state.llmStatus = "Sending batch request for LLM highlight mode...";
+      sendDebugLog("content.llm", "info", "request.start", { chunkId: chunk.id, cacheKey });
+      renderLlmState();
+      await persistLlmSettings();
+    } else {
+      sendDebugLog("content.llm", "info", "prefetch.start", { chunkId: chunk.id, cacheKey });
+    }
 
     try {
-      const batchChunks = buildLlmBatchChunks(chunk);
-      const pendingChunks = batchChunks.filter((item) => !getCachedLlmChunkAnalysis(getLlmAnalysisCacheKey(item)));
+      const batchPlan = buildLlmBatchPlan(chunk);
+      const pendingChunks = batchPlan.chunks.filter((item) => !getCachedLlmChunkAnalysis(getLlmAnalysisCacheKey(item)));
       const chunksToRequest = pendingChunks.length ? pendingChunks : [chunk];
+      if (!chunksToRequest.some((item) => item.id === chunk.id)) {
+        chunksToRequest.unshift(chunk);
+      }
+      if (!isPrefetch) {
+        state.llmStatus =
+          `Sending LLM request (${chunksToRequest.length} chunks, strategy ${batchPlan.strategy})...`;
+        renderLlmState();
+      }
 
-      const { prompt, result } = await requestLlmForBatch(chunksToRequest);
-      state.llmLastPrompt = prompt;
-      state.llmLastResponse = String(result?.responseText || "");
-      state.llmLastUsage = result?.usage || null;
-      state.llmLastCost = result?.cost || null;
+      const { prompt, result } = await requestLlmForBatch(chunksToRequest, batchPlan);
+      if (!isPrefetch) {
+        state.llmLastPrompt = prompt;
+        state.llmLastResponse = String(result?.responseText || "");
+        state.llmLastUsage = result?.usage || null;
+        state.llmLastCost = result?.cost || null;
+      }
 
       const parsedByChunk = normalizeLlmBatchPayload(state.llmLastResponse, chunksToRequest);
       sendDebugLog("content.llm", "info", "response.parsed", {
@@ -1425,12 +1718,25 @@ async function getLlmChunkAnalysis(chunk, options = {}) {
         requestedChunkIds: chunksToRequest.map((item) => item.id)
       });
       for (const requestedChunk of chunksToRequest) {
-        const parsed = parsedByChunk.get(requestedChunk.id) || { words: [], patterns: [] };
+        const parsed = parsedByChunk.get(requestedChunk.id) || {
+          words: [],
+          patterns: [],
+          translationZh: "",
+          sentenceAnalyses: []
+        };
+        if (!hasMeaningfulLlmAnalysis(parsed)) {
+          sendDebugLog("content.llm", "warn", "cache.skip_empty_result", {
+            chunkId: requestedChunk.id
+          });
+          continue;
+        }
         const requestedChunkCacheKey = getLlmAnalysisCacheKey(requestedChunk);
         await cacheLlmChunkAnalysis(requestedChunkCacheKey, {
           source: `llm-${state.llmProvider}`,
           words: parsed.words,
           patterns: parsed.patterns,
+          translationZh: parsed.translationZh,
+          sentenceAnalyses: parsed.sentenceAnalyses,
           rawTokens: []
         }, { persist: false });
       }
@@ -1440,27 +1746,36 @@ async function getLlmChunkAnalysis(chunk, options = {}) {
         source: `llm-${state.llmProvider}`,
         words: [],
         patterns: [],
+        translationZh: "",
+        sentenceAnalyses: [],
         rawTokens: []
       };
       const providerModel = typeof result?.model === "string" && result.model
         ? ` · model ${result.model}`
         : "";
-      state.llmStatus =
-        `LLM highlights ready (batch ${chunksToRequest.length} chunks): ` +
-        `vocab ${finalAnalysis.words.length}, grammar ${finalAnalysis.patterns.length}${providerModel}.`;
-      sendDebugLog("content.llm", "info", "request.ready", {
+      if (!isPrefetch) {
+        state.llmStatus =
+          `LLM highlights ready (batch ${chunksToRequest.length} chunks): ` +
+          `vocab ${finalAnalysis.words.length}, grammar ${finalAnalysis.patterns.length}, ` +
+          `sentences ${finalAnalysis.sentenceAnalyses.length}${providerModel}.`;
+      }
+      sendDebugLog("content.llm", "info", isPrefetch ? "prefetch.ready" : "request.ready", {
         chunkId: chunk.id,
         providerModel: result?.model || "",
         vocabCount: finalAnalysis.words.length,
-        grammarCount: finalAnalysis.patterns.length
+        grammarCount: finalAnalysis.patterns.length,
+        sentenceCount: finalAnalysis.sentenceAnalyses.length,
+        hasTranslation: Boolean(finalAnalysis.translationZh)
       });
       return finalAnalysis;
     } catch (error) {
-      state.llmLastResponse = "";
-      state.llmLastUsage = null;
-      state.llmLastCost = null;
-      state.llmStatus = `LLM highlight error: ${error instanceof Error ? error.message : String(error)}`;
-      sendDebugLog("content.llm", "error", "request.error", {
+      if (!isPrefetch) {
+        state.llmLastResponse = "";
+        state.llmLastUsage = null;
+        state.llmLastCost = null;
+        state.llmStatus = `LLM highlight error: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      sendDebugLog("content.llm", "error", isPrefetch ? "prefetch.error" : "request.error", {
         chunkId: chunk.id,
         error: error instanceof Error ? error.message : String(error)
       });
@@ -1468,11 +1783,15 @@ async function getLlmChunkAnalysis(chunk, options = {}) {
         source: `llm-${state.llmProvider}-error`,
         words: [],
         patterns: [],
-        rawTokens: []
+        rawTokens: [],
+        translationZh: "",
+        sentenceAnalyses: []
       };
     } finally {
-      state.llmBusy = false;
-      renderLlmState();
+      if (!isPrefetch) {
+        state.llmBusy = false;
+        renderLlmState();
+      }
     }
   })();
 
@@ -1482,6 +1801,66 @@ async function getLlmChunkAnalysis(chunk, options = {}) {
   } finally {
     state.llmInflightByCacheKey.delete(cacheKey);
   }
+}
+
+function clearLlmPrefetchTimer() {
+  if (state.llmPrefetchTimer) {
+    clearTimeout(state.llmPrefetchTimer);
+    state.llmPrefetchTimer = null;
+  }
+}
+
+function canRunLlmPrefetch() {
+  return !state.kuromojiRawMode && state.analysisMode === "llm" && state.llmPreloadAhead > 0;
+}
+
+async function runLlmPreloadFromChunk(anchorChunk) {
+  if (!canRunLlmPrefetch() || state.llmPrefetchInFlight || !anchorChunk) {
+    return;
+  }
+  const anchorIndex = state.chunks.findIndex((chunk) => chunk.id === anchorChunk.id);
+  if (anchorIndex < 0) {
+    return;
+  }
+
+  state.llmPrefetchInFlight = true;
+  refreshMetaText();
+  try {
+    const aheadCount = parseConfigInt(
+      state.llmPreloadAhead,
+      LLM_PRELOAD_AHEAD_OPTIONS,
+      DEFAULT_LLM_PRELOAD_AHEAD
+    );
+    for (let offset = 1; offset <= aheadCount; offset += 1) {
+      const chunk = state.chunks[anchorIndex + offset];
+      if (!chunk) {
+        break;
+      }
+      if (hasCachedLlmAnalysisForChunk(chunk)) {
+        continue;
+      }
+      await getLlmChunkAnalysis(chunk, { allowRequest: true, prefetch: true });
+    }
+  } finally {
+    state.llmPrefetchInFlight = false;
+    refreshMetaText();
+  }
+}
+
+function scheduleLlmPreloadFromChunk(anchorChunk) {
+  clearLlmPrefetchTimer();
+  if (!canRunLlmPrefetch()) {
+    return;
+  }
+  state.llmPrefetchTimer = setTimeout(() => {
+    state.llmPrefetchTimer = null;
+    runLlmPreloadFromChunk(anchorChunk).catch((error) => {
+      sendDebugLog("content.llm", "error", "prefetch.error", {
+        chunkId: anchorChunk?.id || "",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+  }, LLM_PREFETCH_IDLE_DELAY_MS);
 }
 
 async function getChunkAnalysis(chunk) {
@@ -1511,7 +1890,9 @@ async function getChunkAnalysis(chunk) {
       source: cached.source,
       words: toRawHighlightWords(rawTokens),
       patterns: [],
-      rawTokens: rawTokens.slice(0, 400)
+      rawTokens: rawTokens.slice(0, 400),
+      translationZh: "",
+      sentenceAnalyses: []
     };
   }
 
@@ -1528,7 +1909,9 @@ async function getChunkAnalysis(chunk) {
     source: cached.source,
     words,
     patterns,
-    rawTokens
+    rawTokens,
+    translationZh: "",
+    sentenceAnalyses: []
   };
 }
 
@@ -1708,12 +2091,16 @@ async function renderCurrentChunk(scrollIntoView = true) {
   state.currentWords = analysis.words;
   state.currentPatterns = analysis.patterns;
   state.currentRawTokens = analysis.rawTokens || [];
+  state.currentTranslationZh = analysis.translationZh || "";
+  state.currentSentenceAnalyses = Array.isArray(analysis.sentenceAnalyses) ? analysis.sentenceAnalyses : [];
 
   applyHighlights(chunk, state.currentWords, state.currentPatterns);
+  renderTranslationSection();
   renderVocabularyList();
   renderPatternList();
   renderPersonalDictionary();
   updateMetaText(analysis.source, chunk);
+  scheduleLlmPreloadFromChunk(chunk);
 }
 
 async function changeChunk(step) {
@@ -1885,6 +2272,40 @@ function handlePanelChange(event) {
     persistLlmSettings().catch((error) => {
       console.warn("[Aozora Helper] OpenAI tier save failed", error);
     });
+    return;
+  }
+
+  const llmBatchMaxSelect = event.target.closest("select[data-action='llm-batch-max']");
+  if (llmBatchMaxSelect) {
+    state.llmBatchMaxChunks = parseConfigInt(
+      llmBatchMaxSelect.value,
+      LLM_BATCH_MAX_CHUNKS_OPTIONS,
+      DEFAULT_LLM_BATCH_MAX_CHUNKS
+    );
+    state.llmStatus = `Batch size cap updated: ${state.llmBatchMaxChunks}.`;
+    renderLlmState();
+    persistLlmSettings().catch((error) => {
+      console.warn("[Aozora Helper] LLM batch max save failed", error);
+    });
+    return;
+  }
+
+  const llmPreloadAheadSelect = event.target.closest("select[data-action='llm-preload-ahead']");
+  if (llmPreloadAheadSelect) {
+    state.llmPreloadAhead = parseConfigInt(
+      llmPreloadAheadSelect.value,
+      LLM_PRELOAD_AHEAD_OPTIONS,
+      DEFAULT_LLM_PRELOAD_AHEAD
+    );
+    state.llmStatus = `Preload ahead updated: ${state.llmPreloadAhead} chunks.`;
+    renderLlmState();
+    persistLlmSettings().catch((error) => {
+      console.warn("[Aozora Helper] LLM preload ahead save failed", error);
+    });
+    const chunk = getCurrentChunk();
+    if (chunk) {
+      scheduleLlmPreloadFromChunk(chunk);
+    }
     return;
   }
 
@@ -2112,6 +2533,8 @@ async function init() {
   state.tooltip = createTooltip();
   state.ui = {
     metaEl: state.panel.querySelector("[data-role='meta']"),
+    translationTextEl: state.panel.querySelector("[data-role='translation-text']"),
+    sentenceAnalysisListEl: state.panel.querySelector("[data-role='sentence-analysis-list']"),
     vocabListEl: state.panel.querySelector("[data-role='vocab-list']"),
     patternListEl: state.panel.querySelector("[data-role='pattern-list']"),
     knownWordsListEl: state.panel.querySelector("[data-role='known-words-list']"),
@@ -2125,6 +2548,8 @@ async function init() {
     llmProviderSelectEl: state.panel.querySelector("select[data-action='llm-provider']"),
     llmOpenaiModelInputEl: state.panel.querySelector("input[data-action='llm-openai-model']"),
     llmOpenaiTierSelectEl: state.panel.querySelector("select[data-action='llm-openai-tier']"),
+    llmBatchMaxSelectEl: state.panel.querySelector("select[data-action='llm-batch-max']"),
+    llmPreloadAheadSelectEl: state.panel.querySelector("select[data-action='llm-preload-ahead']"),
     llmLearnerProfileInputEl: state.panel.querySelector("input[data-action='llm-learner-profile']"),
     llmKeyInputEl: state.panel.querySelector("input[data-action='llm-key']"),
     llmTemplateTextAreaEl: state.panel.querySelector("textarea[data-action='llm-template']"),
